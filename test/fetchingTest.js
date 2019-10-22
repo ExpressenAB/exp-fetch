@@ -10,7 +10,7 @@ describe("fetch", function () {
   var host = "http://example.com";
   var path = "/testing123";
   var fake = nock(host);
-  afterEach(nock.cleanAll);
+  beforeEach(nock.cleanAll);
 
   it("should support callbacks and promises", function (done) {
     var fetch = fetchBuilder().fetch;
@@ -487,24 +487,92 @@ describe("fetch", function () {
   });
 
   describe("app name header", function () {
-    it("should include app name from package.json", function (done) {
+    it("should include app name from package.json", function () {
       var fetch = fetchBuilder({contentType: "json"}).fetch;
-      fake.get(path).reply(function () {
-        this.req.headers["x-exp-fetch-appname"].should.eql("exp-fetch");
-        done();
-      });
-      fetch(host + path);
+
+      fake
+        .get(path)
+        .matchHeader("x-exp-fetch-appname", "exp-fetch")
+        .reply(200);
+
+      return fetch(host + path);
+    });
+  });
+
+  describe.skip("retry", function () { // 2019-09-19 - Skip until next version of got is published - takes 3000ms otherwise
+    it("should retry if retry is specified in behavior", async () => {
+      var fetch = fetchBuilder({
+        contentType: "json",
+        cache: false,
+        retry: {
+          calculateDelay() {
+            return 50;
+          },
+          retries: 2,
+          statusCodes: [500, 503]
+        }
+      }).fetch;
+
+      nock(host)
+        .get(path)
+        .reply(500)
+        .get(path)
+        .reply(503)
+        .get(path)
+        .reply(200, {data: 1});
+
+      const response = await fetch(host + path);
+      response.should.deep.equal({data: 1});
     });
   });
 
   describe("timeout", function () {
-    it("should honor timeout set in behavior", function (done) {
+    it("should honour timeout set in behavior", function (done) {
       var fetch = fetchBuilder({
         timeout: 10
       }).fetch;
+
       fake
         .get(path)
-        .socketDelay(600)
+        .delay(600)
+        .reply(200, {some: "content"});
+
+      fetch(host + path, function (err) {
+        should.exist(err);
+        err.message.should.include("ESOCKETTIMEDOUT");
+        done();
+      });
+    });
+
+    it("should honour socket timeout set in behavior", function (done) {
+      var fetch = fetchBuilder({
+        timeout: {
+          socket: 10
+        }
+      }).fetch;
+
+      fake
+        .get(path)
+        .socketDelay(30)
+        .reply(200, {some: "content"});
+
+      fetch(host + path, function (err) {
+        should.exist(err);
+        err.message.should.include("ESOCKETTIMEDOUT");
+        done();
+      });
+    });
+
+    it("should honour response timeout set in behavior", function (done) {
+      var fetch = fetchBuilder({
+        timeout: {
+          response: 10
+        }
+      }).fetch;
+
+      fake
+        .get(path)
+        .delay(100)
         .reply(200, {some: "content"});
 
       fetch(host + path, function (err) {
@@ -520,9 +588,31 @@ describe("fetch", function () {
       }).fetch;
       fake
         .get(path)
+        .delay(30)
+        .reply(200, {some: "content"});
+
+      fetch({url: host + path, timeout: 1}, function (err) {
+        should.exist(err);
+        err.message.should.include("ESOCKETTIMEDOUT");
+        done();
+      });
+    });
+
+    it("should allow overriding timeout behavior with object for socket timeout", function (done) {
+      var fetch = fetchBuilder({
+        timeout: 200
+      }).fetch;
+      fake
+        .get(path)
         .socketDelay(30)
         .reply(200, {some: "content"});
-      fetch({url: host + path, timeout: 1}, function (err) {
+
+      fetch({
+        url: host + path,
+        timeout: {
+          socket: 10
+        }
+      }, function (err) {
         should.exist(err);
         err.message.should.include("ESOCKETTIMEDOUT");
         done();
@@ -539,7 +629,7 @@ describe("fetch", function () {
 
       fake
         .get("/someotherpath")
-        .socketDelay(30)
+        .delay(30)
         .reply(200, {some: "content"});
       fetch({url: host + path, timeout: 1}, function (err) {
         should.exist(err);
@@ -554,7 +644,7 @@ describe("fetch", function () {
       }).fetch;
       fake
         .get(path)
-        .socketDelay(30)
+        .delay(30)
         .reply(200, {some: "content"});
       fetch({url: host + path, timeout: 1}).catch(function (err) {
         should.exist(err);
